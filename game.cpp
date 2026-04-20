@@ -3845,23 +3845,28 @@ bool Game::playerPurchaseItem(const uint32_t& playerId, const uint16_t& spriteId
 	if(!merchant)
 		return false;
 
-	if (Condition* conditionlook = Condition::createCondition(CONDITIONID_DEFAULT, CONDITION_EXHAUST, 200, 0, false, EXHAUST_PLAYERPURCHASEITEM))
+	if (Condition* conditionlook = Condition::createCondition(CONDITIONID_DEFAULT, CONDITION_EXHAUST, 1000, 0, false, EXHAUST_PLAYERPURCHASEITEM))
 		player->addCondition(conditionlook);
 
 	const ItemType& it = Item::items.getItemIdByClientId(spriteId);
 	if(!it.id)
-		return false;
+    return false;
+
+	// OTIMIZAÇÃO: força compra em mochilas para itens não stackáveis
+	bool useBackpacks = inBackpacks;
+	if(!it.stackable && !it.isFluidContainer() && !it.isSplash())
+    useBackpacks = true;
 
 	uint8_t subType;
 	if(it.isSplash() || it.isFluidContainer())
-		subType = clientFluidToServer(count);
+    subType = clientFluidToServer(count);
 	else
-		subType = count;
+    subType = count;
 
 	if(!player->canShopItem(it.id, subType, SHOPEVENT_BUY))
-		return false;
+    return false;
 
-	merchant->onPlayerTrade(player, SHOPEVENT_BUY, onBuy, it.id, subType, amount, ignoreCap, inBackpacks);
+	merchant->onPlayerTrade(player, SHOPEVENT_BUY, onBuy, it.id, subType, amount, ignoreCap, useBackpacks);
 	return true;
 }
 
@@ -7477,10 +7482,13 @@ void Game::shutdown()
 
 void Game::cleanup()
 {
+	// OTIMIZAÇÃO: early-exit se não há nada para limpar (caso mais comum)
+	if(releaseThings.empty() && toDecayItems.empty())
+		return;
+
 	//free memory
 	for(std::vector<Thing*>::iterator it = releaseThings.begin(); it != releaseThings.end(); ++it)
 		(*it)->unRef();
-
 	releaseThings.clear();
 	for(DecayList::iterator it = toDecayItems.begin(); it != toDecayItems.end(); ++it)
 	{
@@ -7490,7 +7498,6 @@ void Game::cleanup()
 		else
 			decayItems[(lastBucket + 1 + (*it)->getDuration() / 1000) % EVENT_DECAYBUCKETS].push_back(*it);
 	}
-
 	toDecayItems.clear();
 }
 

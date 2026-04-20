@@ -146,7 +146,18 @@ void Monster::onTargetDisappear(bool)
 	attackTicks = 0;
 	extraMeleeAttack = true;
 	if(g_config.getBool(ConfigManager::MONSTER_SPAWN_WALKBACK))
-		g_game.steerCreature(this, masterPosition, 5000);
+	{
+		// OTIMIZAÇÃO: só aciona walkback se está longe do spawn point
+		const Position& myPos = getPosition();
+		if(std::abs((int32_t)myPos.x - (int32_t)masterPosition.x) > 3 ||
+		   std::abs((int32_t)myPos.y - (int32_t)masterPosition.y) > 3 ||
+		   myPos.z != masterPosition.z)
+		{
+			g_game.steerCreature(this, masterPosition, 5000);
+		}
+		else
+			setIdle(true); // já está no spawn, entra em idle direto
+	}
 }
 
 void Monster::onTargetDrain(Creature* target, int32_t points)
@@ -569,6 +580,7 @@ void Monster::setIdle(bool _idle)
 		clearTargetList();
 		clearFriendList();
 		g_game.removeCreatureCheck(this);
+		stopEventWalk(); // OTIMIZAÇÃO: cancela walk tick ao entrar em idle
 	}
 	else
 		g_game.addCreatureCheck(this);

@@ -86,6 +86,8 @@ Creature::Creature()
 	walkUpdateTicks = 0;
 	checkVector = -1;
 	lastFailedFollow = 0;
+	lastStartAutoWalk = 0;
+	lastFollowPosition = Position();
 
 	onIdleStatus();
 }
@@ -276,6 +278,26 @@ void Creature::onAttacking(uint32_t interval)
 
 void Creature::onWalk()
 {
+	// OTIMIZAÇÃO: monstros já adjacentes ao alvo não precisam andar
+	if(!getPlayer())
+	{
+		Creature* target = getAttackedCreature();
+		if(target)
+		{
+			const Position& myPos = getPosition();
+			const Position& targetPos = target->getPosition();
+			if(myPos.z == targetPos.z &&
+			   std::abs((int32_t)myPos.x - (int32_t)targetPos.x) <= 1 &&
+			   std::abs((int32_t)myPos.y - (int32_t)targetPos.y) <= 1)
+			{
+				// já está adjacente — cancela walk pendente e aguarda próximo onThink
+				listWalkDir.clear();
+				stopEventWalk();
+				return;
+			}
+		}
+	}
+
 	if(getWalkDelay() <= 0)
 	{
 		Direction dir;
@@ -298,10 +320,14 @@ void Creature::onWalk()
 		onWalkAborted();
 	}
 
+	// OTIMIZAÇÃO: só reage ao próximo passo se há caminho definido
 	if(eventWalk)
 	{
 		eventWalk = 0;
-		addEventWalk();
+		if(!listWalkDir.empty())
+			addEventWalk();
+		// se não há mais passos, não re-agenda — o próximo movimento
+		// (ex: goToFollowCreature) vai chamar addEventWalk() quando necessário
 	}
 }
 
@@ -377,8 +403,9 @@ void Creature::addEventWalk(bool firstStep/* = false*/)
 	if(ticks < 1)
 		return;
 
-	if(ticks == 1)
-		g_game.checkCreatureWalk(getID());
+	// OTIMIZAÇÃO: monstros ociosos sem caminho não precisam de tick de walk
+	if(!getPlayer() && !getMaster() && listWalkDir.empty())
+		return;
 
 	eventWalk = g_scheduler.addEvent(createSchedulerTask(std::max((int64_t)SCHEDULER_MINTICKS, ticks),
 		boost::bind(&Game::checkCreatureWalk, &g_game, id)));
@@ -1135,44 +1162,54 @@ void Creature::getPathSearchParams(const Creature*, FindPathParams& fpp) const
 {
 	fpp.fullPathSearch = !hasFollowPath;
 	fpp.clearSight = true;
-	fpp.maxSearchDist = 9;
+	fpp.maxSearchDist = 12;
 	fpp.minTargetDist = fpp.maxTargetDist = 1;
 }
 
 void Creature::goToFollowCreature()
 {
-	// --- INÍCIO DA OTIMIZAÇÃO: PROTEÇÃO DE CPU (PATHFINDING EXHAUST) ---
 	if(getPlayer()) 
 	{
-		// Regra original para Jogadores
 		if(OTSYS_TIME() - lastFailedFollow <= g_config.getNumber(ConfigManager::FOLLOW_EXHAUST))
 			return;
 	} 
 	else 
 	{
-		// Nova Regra para Monstros: Se falhou em achar a rota, aguarda 1.5s (1500ms) para tentar novamente.
-		// Isso impede que dezenas de monstros spammem o algoritmo A* ao mesmo tempo.
 		if(OTSYS_TIME() - lastFailedFollow <= 100)
 			return;
+
+		// OTIMIZAÇÃO: só throttlea se o alvo NÃO se moveu
+		// Se o alvo se moveu, recalcula imediatamente
+		if(!listWalkDir.empty() && OTSYS_TIME() - lastStartAutoWalk <= 400)
+		{
+			if(!followCreature || followCreature->getPosition() == lastFollowPosition)
+			{
+				onFollowCreatureComplete(followCreature);
+				return;
+			}
+			// alvo se moveu — deixa passar e recalcula abaixo
+		}
 	}
-	// --- FIM DA OTIMIZAÇÃO ---
 
 	if(followCreature)
 	{
+		lastFollowPosition = followCreature->getPosition(); // registra posição atual
 		FindPathParams fpp;
 		getPathSearchParams(followCreature, fpp);
 		if(g_game.getPathToEx(this, followCreature->getPosition(), listWalkDir, fpp))
 		{
 			hasFollowPath = true;
+			lastStartAutoWalk = OTSYS_TIME();
 			startAutoWalk(listWalkDir);
 		}
 		else
 		{
 			hasFollowPath = false;
-			lastFailedFollow = OTSYS_TIME(); // Registra a falha para ativar a exaustão!
+			lastFailedFollow = OTSYS_TIME();
+			listWalkDir.clear();
+			stopEventWalk();
 		}
 	}
-
 	onFollowCreatureComplete(followCreature);
 }
 
@@ -1774,8 +1811,13 @@ int64_t Creature::getEventStepTicks(bool onlyDelay/* = false*/) const
 		return ret;
 
 	if(!onlyDelay)
-		return getStepDuration();
-
+	{
+		int64_t duration = getStepDuration();
+		// OTIMIZAÇÃO: monstros nunca precisam de tick menor que 150ms
+		if(!getPlayer())
+			return std::max((int64_t)150, duration);
+		return duration;
+	}
 	return 1;
 }
 

@@ -227,6 +227,8 @@ class Creature : public AutoId, virtual public Thing
 		int32_t getWalkDelay() const;
 		int64_t getStepDuration(Direction dir) const;
 		int64_t getStepDuration() const;
+		int64_t lastStartAutoWalk; // throttle de startAutoWalk para monstros
+		Position lastFollowPosition; // última posição conhecida do alvo
 
 		int64_t getEventStepTicks(bool onlyDelay = false) const;
 		int64_t getTimeSinceLastMove() const;
